@@ -8,7 +8,7 @@ from Best_fit import can_pack_all_products_guillotine, GuillotineStockSheet
 from cutting_stock_env_2DCSP_S_Q import CuttingStockEnv
 
 class QLearningAgent:
-    def __init__(self, env, alpha=0.1, gamma=0.99, epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.01):
+    def __init__(self, env, alpha=0.01, gamma=0.99, epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.01):
         self.env = env
         self.alpha = alpha          # Learning rate
         self.gamma = gamma          # Discount factor
@@ -19,7 +19,7 @@ class QLearningAgent:
         self.state_dim = env.observation_space.shape[0]
         # Với action_space là MultiDiscrete([3, n_products]), nvec = [3, n_products]
         self.action_dim = np.prod(env.action_space.nvec)
-        self.weights = np.random.rand(self.state_dim, self.action_dim) * 0.01
+        self.weights = np.random.randn(self.state_dim, self.action_dim) * 0.01
         
         # Theo dõi metrics
         self.rewards_history = []
@@ -41,7 +41,8 @@ class QLearningAgent:
         next_q = 0 if done else np.max(next_state.dot(self.weights))
         td_target = reward + self.gamma * next_q
         td_error = td_target - current_q
-        self.weights[:, action_idx] += self.alpha * td_error * state
+        # self.weights[:, action_idx] += self.alpha * td_error * state
+        self.weights[:, action_idx] += self.alpha * (td_error * state - 0.001 * self.weights[:, action_idx])
         
     def train(self, episodes=1000):
         for episode in range(episodes):
@@ -73,6 +74,11 @@ class QLearningAgent:
             
             if episode % 100 == 0:
                 print(f"Episode {episode}: Reward={episode_reward:.2f}, Cost={episode_cost:.2f}, Epsilon={self.epsilon:.4f}")
+
+            if episode % 500 == 0:
+              avg_cost = np.mean(agent.costs_history[-100:])
+              success_rate = np.mean(agent.success_history[-100:])
+              print(f"Episode {episode}: Avg Cost (100 eps) = {avg_cost:.2f}, Success Rate = {success_rate:.2f}")
                 
     def plot_metrics(self):
         episodes = np.arange(len(self.rewards_history))
@@ -96,6 +102,24 @@ class QLearningAgent:
         plt.xlabel("Episode")
         plt.ylabel("Number of Patterns")
         plt.title("Number of Patterns")
+
+        # plt.subplot(231)
+        # plt.plot(episodes[19950:20000], self.rewards_history[19950:20000])
+        # plt.xlabel("Episode")
+        # plt.ylabel("Episode Reward")
+        # plt.title("Episode Reward")
+
+        # plt.subplot(232)
+        # plt.plot(episodes[19950:20000], self.costs_history[19950:20000])
+        # plt.xlabel("Episode")
+        # plt.ylabel("Total Cost")
+        # plt.title("Total Cost per Episode")
+
+        # plt.subplot(233)
+        # plt.plot(episodes[19950:20000], self.patterns_history[19950:20000])
+        # plt.xlabel("Episode")
+        # plt.ylabel("Number of Patterns")
+        # plt.title("Number of Patterns")
         
         plt.subplot(234)
         plt.plot(episodes, self.epsilon_history)
@@ -121,14 +145,19 @@ class QLearningAgent:
 # ---------------------------
 # Khởi tạo môi trường và agent
 # ---------------------------
-env = CuttingStockEnv(
-    products=[(50, 40, 7), (60, 30, 3), (40, 40, 3)],
-    pattern_size=(200, 150),
-    max_steps=200,
-    max_patterns=5 
-)
+if __name__ == '__main__':
+    env = CuttingStockEnv(
+        product_ranges=[
+            (40, 80, 30, 60, 1, 10),  # Sản phẩm 1: width 40-80, height 30-60, demand 1-10
+            (50, 100, 40, 70, 1, 5)   # Sản phẩm 2: width 50-100, height 40-70, demand 1-5
+        ],
+        pattern_size_range=(150, 250, 100, 200),  # Pattern size động
+        max_steps=200,
+        max_patterns=10
+    )
 
-agent = QLearningAgent(env, alpha=0.0001, gamma=0.99, epsilon_decay=0.9999)
-agent.train(episodes=20000)
-agent.plot_metrics()
-agent.save_model("qlearning_model.pkl")
+    agent = QLearningAgent(env, alpha=0.0001, gamma=0.99, epsilon_decay=0.9999)
+    agent.train(episodes=30000)
+    agent.plot_metrics()
+    agent.save_model("qlearning_model.pkl")
+

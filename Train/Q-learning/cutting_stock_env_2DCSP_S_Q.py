@@ -1,56 +1,38 @@
+import sys
+sys.path.append("E:/Learn_space/FPT/REL301m/REL301m_mini_capstone_GROUP4/Helper function")
+
 import gym
 from gym import spaces
 import numpy as np
 from scipy.optimize import linprog
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 from Best_fit import can_pack_all_products_guillotine, GuillotineStockSheet
 
 class CuttingStockEnv(gym.Env):
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, products, pattern_size, C_su=20, C_ss=1, max_steps=100, max_patterns=10):
+    def __init__(self, product_ranges, pattern_size_range, C_su=20, C_ss=1, max_steps=100, max_patterns=10):
         super(CuttingStockEnv, self).__init__()
         
         # Thông số bài toán
-        self.products = products  # [(w1, h1, d1), (w2, h2, d2), ...]
-        self.pattern_size = pattern_size  # (width, height)
+        # self.products = products  # [(w1, h1, d1), (w2, h2, d2), ...]
+        # self.stock_size = stock_size  # (width, height)
         self.C_su = C_su  # Setup cost per pattern
         self.C_ss = C_ss  # Stock sheet cost
 
-        """
-            "spaces" là một module cung cấp classes để đinh nghĩa observation space và action space
-                + Discrete: Dùng để định nghĩa không gian rời rạc (ví dụ: số lượng các hành động có thể thực hiện).
-                + Box: Dùng để định nghĩa không gian liên tục với các giá trị nằm trong một khoảng nhất định (ví dụ: vị trí, vận tốc,...).
-                + MultiDiscrete: Dùng để định nghĩa không gian có nhiều biến rời rạc.
-                + Tuple: Dùng để kết hợp nhiều không gian lại với nhau thành một không gian phức hợp.
-                + Sequence: Dùng để định nghĩa các chuỗi các phần tử theo một không gian nhất định.
-        """
-
-        """
-        - Không gian hành động: [action_type, product_idx]
-        - Tổng số hành động sẽ bằng "3 * len(products)"
-        - action_type gồm 3 hành động ứng với mô tả
-            + 0: Thêm sản phẩm vào pattern
-            + 1: Xóa sản phẩm khỏi pattern
-            + 2: Xác nhận pattern
-        - product_idx dùng trong các hành động như thêm và xóa sản phẩm
+        self.product_ranges = product_ranges  # [(w_min, w_max, h_min, h_max, d_min, d_max), ...]
+        self.pattern_size_range = pattern_size_range  # (min_w, max_w, min_h, max_h)
+        self._generate_dynamic_config()
         
-        - Không gian rời rạc (Discrete Space) trong reinforcement learning được dùng để mô tả tập hợp các lựa chọn hữu hạn. 
-        """
-        self.action_space = spaces.MultiDiscrete([3, len(products)])
+        # Không gian hành động: [action_type, product_idx]
+        self.action_space = spaces.MultiDiscrete([3, len(self.products)])
         
-        """
-        - Không gian trạng thái: Demand + Pattern hiện tại + Diện tích trống
-        - Được thiết dưới dạng 1 vector liên tục có kích thước len(products) + len(products) + 1
-        - Trong đó gồm những thông tin mà agent cần quan sát như:
-            + Demand: Gồm "len(products)" phần từ => Cho agent biết cần sán xuất bao nhiêu tấm vs mỗi product
-            + Current Pattern: Gồm "len(products)" phần từ, mỗi phần tử là số lượng tấm đã được thêm vào patten hiện tại của mỗi product
-                            => Cho biết tình trạng hiện tại của pattern để đưa ra quyết định thêm product hoặc không
-            + Remaining Area (Diện tích trống còn lại của pattern) => Cho agent đánh giá được khả năng chứa của patterns từ đó đưa ra quyết định có thêm product hay không
-        """
+        # Không gian trạng thái: Demand + Pattern hiện tại + Diện tích trống
         self.observation_space = spaces.Box(
             low=0, 
             high=np.inf, 
-            shape=(len(products) + len(products) + 1,),  # [demand, current_pattern, remaining_area]
+            shape=(len(self.products)*2 + 1 + 2,),  # Thêm 2 cho pattern_size_normalized
             dtype=np.float32
         )
         
@@ -60,7 +42,22 @@ class CuttingStockEnv(gym.Env):
         
         self.reset()
 
+    def _generate_dynamic_config(self):
+        # Sinh sản phẩm và pattern size ngẫu nhiên
+        self.products = [
+            (
+                np.random.randint(w_min, w_max + 1),
+                np.random.randint(h_min, h_max + 1),
+                np.random.randint(d_min, d_max + 1)
+            ) for (w_min, w_max, h_min, h_max, d_min, d_max) in self.product_ranges
+        ]
+        self.pattern_size = (
+            np.random.randint(self.pattern_size_range[0], self.pattern_size_range[1] + 1),
+            np.random.randint(self.pattern_size_range[2], self.pattern_size_range[3] + 1)
+        )
+
     def reset(self):
+        self._generate_dynamic_config()  
         self.current_step = 0
         self.current_demand = np.array([p[2] for p in self.products], dtype=np.int32)
         self.current_pattern = np.zeros(len(self.products), dtype=np.int32)
@@ -79,7 +76,6 @@ class CuttingStockEnv(gym.Env):
         reward = 0.0
         done = False
         
-        # (SỬA) Tạo biến info để trả cost ra agent
         info = {"cost": 0.0}  # Mặc định cost = 0, sẽ cập nhật khi done
         
         # -------------------------
@@ -93,26 +89,31 @@ class CuttingStockEnv(gym.Env):
                 if packable:
                     self.current_pattern[product_idx] += 1
                     self.current_demand[product_idx] -= 1
-                    # (SỬA) Thưởng nhỏ khi thêm sản phẩm thành công
+                    # Cập nhật remaining_area: trừ diện tích sản phẩm (ước tính)
+                    product_area = self.products[product_idx][0] * self.products[product_idx][1]
+                    self.remaining_area = max(self.remaining_area - product_area, 0)
                     reward += 5  
-                    # Thêm thưởng theo utilization (khuyến khích lấp đầy)
                     utilization = (self.pattern_size[0]*self.pattern_size[1] - self.remaining_area) / (self.pattern_size[0]*self.pattern_size[1])
-                    reward += 10 * utilization
+                    reward += 20 * utilization
                 else:
                     reward -= 2
         elif action_type == 1:  # Xóa sản phẩm
             if self.current_pattern[product_idx] > 0:
                 self.current_pattern[product_idx] -= 1
                 self.current_demand[product_idx] += 1
+                # Cập nhật remaining_area: cộng lại diện tích sản phẩm đã xoá
+                product_area = self.products[product_idx][0] * self.products[product_idx][1]
+                self.remaining_area += product_area
                 reward -= 1
         elif action_type == 2:  # Xác nhận pattern
             if len(self.patterns) >= self.max_patterns:
-                reward -= 50  # phạt nếu vượt quá số pattern
+                reward -= 50  # Phạt nếu vượt quá số pattern
             if np.sum(self.current_pattern) > 0:
                 self.patterns.append(self.current_pattern.copy())
                 self.current_pattern = np.zeros(len(self.products), dtype=np.int32)
-                self.remaining_area = self.pattern_size[0]*self.pattern_size[1]
-                reward += 20  # thưởng khi xác nhận pattern
+                # Sau khi xác nhận, reset remaining_area về diện tích pattern ban đầu
+                self.remaining_area = self.pattern_size[0] * self.pattern_size[1]
+                reward += 50 * (1 - len(self.patterns)/self.max_patterns)
             else:
                 reward -= 10
         
@@ -120,31 +121,39 @@ class CuttingStockEnv(gym.Env):
         # Kiểm tra điều kiện kết thúc
         # -------------------------
         if np.all(self.current_demand == 0):
-            # (SỬA) Tính cost khi hoàn thành
+            # Nếu còn sản phẩm trong current_pattern chưa được xác nhận, tự động xác nhận
+            if np.sum(self.current_pattern) > 0:
+                self.patterns.append(self.current_pattern.copy())
+                self.current_pattern = np.zeros(len(self.products), dtype=np.int32)
+                self.remaining_area = self.pattern_size[0] * self.pattern_size[1]
             total_cost = self._calculate_total_cost()
-            # (SỬA) Thưởng cơ bản khi hoàn thành, sau đó trừ penalty cost theo log
-            reward += 100  
-            reward -= np.log(1 + total_cost)
+            reward += 500  
+            reward -= 0.1 * total_cost  # Phạt theo chi phí thực tế
             info["cost"] = total_cost
             done = True
         else:
             if self.current_step >= self.max_steps:
-                reward -= 50  # phạt nặng nếu hết bước mà chưa xong
+                missing_demand = np.sum(self.current_demand)
                 total_cost = self._calculate_total_cost()
-                reward -= np.log(1 + total_cost)
+                reward -= (100 + 5 * missing_demand)
                 info["cost"] = total_cost
                 done = True
             else:
-                reward -= 1  # phạt nhẹ mỗi bước
+                reward -= 1  # Phạt nhẹ mỗi bước
         
         return self._get_state(), reward, done, info
+
     
     def _get_state(self):
         # Chuẩn hóa demand, pattern và tính utilization của pattern hiện tại
         demand_normalized = self.current_demand / np.array([p[2] for p in self.products])
         pattern_normalized = self.current_pattern / (np.max(self.current_pattern) + 1e-5)
         utilization = (self.pattern_size[0]*self.pattern_size[1] - self.remaining_area) / (self.pattern_size[0]*self.pattern_size[1])
-        return np.concatenate([demand_normalized, pattern_normalized, [utilization]])
+        pattern_size_normalized = [
+            self.pattern_size[0] / 300,  # Giả sử max width = 300
+            self.pattern_size[1] / 300   # Giả sử max height = 300
+        ]
+        return np.concatenate([demand_normalized, pattern_normalized, [utilization], pattern_size_normalized])
     
     def _check_packing(self, pattern):
         # Gọi best-fit guillotine để kiểm tra khả năng xếp sản phẩm
@@ -188,6 +197,87 @@ class CuttingStockEnv(gym.Env):
         print("Demand:", self.current_demand)
         print("Current Pattern:", self.current_pattern)
         print("Remaining Area:", self.remaining_area)
+    
+    def visualize_patterns(self):
+        """
+        Vẽ trực quan các pattern đã xác nhận bằng cách sử dụng thuật toán best-fit
+        để xác định vị trí các sản phẩm trên pattern.
+        """
+        if not self.patterns:
+            print("Không có pattern nào được xác nhận để hiển thị.")
+            return
+        
+        n_patterns = len(self.patterns)
+        fig, axes = plt.subplots(1, n_patterns, figsize=(5 * n_patterns, 5))
+        if n_patterns == 1:
+            axes = [axes]
+        
+        for idx, pattern in enumerate(self.patterns):
+            ax = axes[idx]
+            ax.set_title(f"Pattern {idx+1}\nSize: {self.pattern_size}")
+            ax.set_xlim(0, self.pattern_size[0])
+            ax.set_ylim(0, self.pattern_size[1])
+            ax.invert_yaxis()  # Đảo trục y để mô phỏng hệ tọa độ trên giấy
+            ax.set_aspect('equal')
+            
+            # Tạo danh sách sản phẩm có trong pattern theo dạng (width, height, quantity, product_idx)
+            products_to_pack = []
+            for i in range(len(pattern)):
+                if pattern[i] > 0:
+                    products_to_pack.append((self.products[i][0], self.products[i][1], pattern[i], i))
+            # Sử dụng GuillotineStockSheet để xếp sản phẩm
+            gs = GuillotineStockSheet(self.pattern_size[0], self.pattern_size[1])
+            try:
+                placements = gs.place_products(products_to_pack)
+            except AttributeError:
+                print("Method 'place_products' không tồn tại trong GuillotineStockSheet. Sử dụng giải pháp tạm thời.")
+                # Tạo giải pháp tạm: đặt các sản phẩm liền nhau theo thứ tự
+                placements = []
+                x, y = 0, 0
+                max_row_height = 0
+                for prod in products_to_pack:
+                    w, h, qty, prod_idx = prod
+                    for _ in range(qty):
+                        # Nếu vượt quá width pattern, chuyển hàng
+                        if x + w > self.pattern_size[0]:
+                            x = 0
+                            y += max_row_height
+                            max_row_height = 0
+                        placements.append({
+                            "x": x,
+                            "y": y,
+                            "width": w,
+                            "height": h,
+                            "product_idx": prod_idx
+                        })
+                        x += w
+                        if h > max_row_height:
+                            max_row_height = h
+
+            # Vẽ các hình chữ nhật theo placements
+            from matplotlib.patches import Rectangle
+            for placement in placements:
+                rect = Rectangle(
+                    (placement["x"], placement["y"]),
+                    placement["width"],
+                    placement["height"],
+                    edgecolor="black",
+                    facecolor=np.random.rand(3,),
+                    alpha=0.6
+                )
+                ax.add_patch(rect)
+                ax.text(
+                    placement["x"] + placement["width"] / 2,
+                    placement["y"] + placement["height"] / 2,
+                    f"P{placement['product_idx']}",
+                    color="black",
+                    weight="bold",
+                    ha="center",
+                    va="center"
+                )
+        plt.tight_layout()
+        plt.show()
+
 
     def close(self):
         pass

@@ -1,164 +1,164 @@
-import gym
-from gym import spaces
 import numpy as np
-from scipy.optimize import linprog
-from Best_fit import can_pack_all_products_guillotine, GuillotineStockSheet
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from io import BytesIO
+from PIL import Image
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 
-# ===============================
-# Environment: CuttingStockEnv
-# ===============================
-class CuttingStockEnv(gym.Env):
-    metadata = {'render.modes': ['human']}
+def generate_colors(n):
+    colors = []
+    cmap = plt.get_cmap('tab20')
+    for i in range(n):
+        colors.append(cmap(i % 20))
+    return colors
 
-    def __init__(self, products, stock_size, C_su=20, C_ss=1, max_steps=100, max_patterns=10):
-        super(CuttingStockEnv, self).__init__()
+class GuillotineStockSheet:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        # Ban đầu, toàn bộ tấm stock là một vùng trống duy nhất: (x, y, w, h)
+        self.free_rectangles = [(0, 0, width, height)]
+        self.placements = []  # Các sản phẩm đã được đặt, mỗi phần tử (x, y, w, h)
 
-        # Thông số bài toán
-        self.products = products  # [(w1, h1, d1), (w2, h2, d2), ...]
-        self.stock_size = stock_size  # (width, height)
-        self.C_su = C_su  # Setup cost per pattern
-        self.C_ss = C_ss  # Stock sheet cost
-
-        # Không gian hành động: [action_type, product_idx]
-        self.action_space = spaces.MultiDiscrete([3, len(products)])
-
-        # Không gian trạng thái: Demand + Pattern hiện tại + Diện tích trống
-        self.observation_space = spaces.Box(
-            low=0,
-            high=np.inf,
-            shape=(len(products) + len(products) + 1,),  # [demand, current_pattern, remaining_area]
-            dtype=np.float32
-        )
-
-        # Các tham số môi trường
-        self.max_steps = max_steps
-        self.max_patterns = max_patterns
-
-        self.reset()
-
-    def reset(self):
-        self.current_step = 0
-        self.current_demand = np.array([p[2] for p in self.products], dtype=np.int32)
-        self.current_pattern = np.zeros(len(self.products), dtype=np.int32)
-        self.patterns = []
-        self.remaining_area = self.stock_size[0] * self.stock_size[1]
-        return self._get_state()
-
-    def step(self, action):
+    def find_free_rect_for(self, rect_w, rect_h):
         """
-        action = (action_type, product_idx)
-        action_type: 0 = Thêm sản phẩm, 1 = Xóa sản phẩm, 2 = Xác nhận pattern
+        Duyệt qua danh sách các vùng trống để tìm vùng có thể chứa hình chữ nhật (rect_w, rect_h)
+        với tiêu chí best-fit (diện tích dư thừa nhỏ nhất).
+        Trả về (index, free_rect) nếu tìm thấy, ngược lại None.
         """
-        self.current_step += 1
-        action_type, product_idx = action
+        best_index = None
+        best_fit_area = float('inf')
+        for i, (fx, fy, fw, fh) in enumerate(self.free_rectangles):
+            if rect_w <= fw and rect_h <= fh:
+                area_diff = (fw * fh) - (rect_w * rect_h)
+                if area_diff < best_fit_area:
+                    best_fit_area = area_diff
+                    best_index = i
+        if best_index is not None:
+            return best_index, self.free_rectangles[best_index]
+        return None
 
-        reward = 0.0
-        done = False
-
-        # (SỬA) Tạo biến info để trả cost ra agent
-        info = {"cost": 0.0}
-
-        # -------------------------
-        # Thực hiện hành động
-        # -------------------------
-        if action_type == 0:  # Thêm sản phẩm
-            if self.current_demand[product_idx] > 0:
-                temp_pattern = self.current_pattern.copy()
-                temp_pattern[product_idx] += 1
-                packable, _ = self._check_packing(temp_pattern)
-                if packable:
-                    self.current_pattern[product_idx] += 1
-                    self.current_demand[product_idx] -= 1
-                    # (SỬA DQN) Thưởng nhỏ khi thêm sp thành công
-                    reward += 5
-                    utilization = (self.stock_size[0]*self.stock_size[1] - self.remaining_area) / (self.stock_size[0]*self.stock_size[1])
-                    reward += 50 * utilization
-                else:
-                    reward -= 2
-        elif action_type == 1:  # Xóa sản phẩm
-            if self.current_pattern[product_idx] > 0:
-                self.current_pattern[product_idx] -= 1
-                self.current_demand[product_idx] += 1
-                reward -= 1
-        elif action_type == 2:  # Xác nhận pattern
-            if len(self.patterns) >= self.max_patterns:
-                reward -= 50
-            if np.sum(self.current_pattern) > 0:
-                self.patterns.append(self.current_pattern.copy())
-                self.current_pattern = np.zeros(len(self.products), dtype=np.int32)
-                self.remaining_area = self.stock_size[0]*self.stock_size[1]
-                reward += 20
-            else:
-                reward -= 10
-
-        # -------------------------
-        # Kiểm tra điều kiện kết thúc
-        # -------------------------
-        if np.all(self.current_demand == 0):
-            total_cost = self._calculate_total_cost()
-            reward += 1000
-            reward -= np.log(1 + total_cost)
-            info["cost"] = total_cost
-            done = True
-        else:
-            if self.current_step >= self.max_steps:
-                reward -= 50
-                total_cost = self._calculate_total_cost()
-                reward -= np.log(1 + total_cost)
-                info["cost"] = total_cost
-                done = True
-            else:
-                reward -= 0.1
-
-        return self._get_state(), reward, done, info
-
-    def _get_state(self):
-        demand_normalized = self.current_demand / np.array([p[2] for p in self.products])
-        pattern_normalized = self.current_pattern / (np.max(self.current_pattern) + 1e-5)
-        utilization = (self.stock_size[0]*self.stock_size[1] - self.remaining_area) / (self.stock_size[0]*self.stock_size[1])
-        return np.concatenate([demand_normalized, pattern_normalized, [utilization]])
-
-    def _check_packing(self, pattern):
-        products_to_pack = []
-        for i in range(len(pattern)):
-            if pattern[i] > 0:
-                products_to_pack.append((self.products[i][0], self.products[i][1], pattern[i]))
-        return can_pack_all_products_guillotine(self.stock_size, products_to_pack)
-
-    def _calculate_total_cost(self):
+    def split_free_rect(self, free_rect, placed_rect):
         """
-        Tính cost = (số pattern * C_su) + (số tờ in * C_ss)
-        Dùng LP (linprog) để tìm x_j tối ưu, chỉ xét các sản phẩm có mặt.
+        Tách vùng trống free_rect khi đặt placed_rect vào bên trong free_rect,
+        theo phương pháp Guillotine (chia theo đường cắt chạy toàn bộ).
+        free_rect: (fx, fy, fw, fh)
+        placed_rect: (px, py, pw, ph) – nằm trong free_rect.
+        Trả về danh sách các vùng trống mới (có diện tích > 0).
         """
-        if not self.patterns:
-            return 0
+        fx, fy, fw, fh = free_rect
+        px, py, pw, ph = placed_rect
+        new_rects = []
+        # Vùng bên phải của placed_rect:
+        right_w = (fx + fw) - (px + pw)
+        if right_w > 0:
+            new_rects.append((px + pw, py, right_w, ph))
+        # Vùng bên trên placed_rect:
+        top_h = (fy + fh) - (py + ph)
+        if top_h > 0:
+            new_rects.append((px, py + ph, fw, top_h))
+        return new_rects
 
-        A_list = []
-        b_list = []
-        for i in range(len(self.products)):
-            total_i = sum(p[i] for p in self.patterns)
-            if total_i > 0:
-                A_list.append([-p[i] for p in self.patterns])
-                b_list.append(-self.products[i][2])
-        if len(A_list) == 0:
-            return 0
+    def place_rect(self, w, h):
+        """
+        Thử đặt hình chữ nhật với kích thước (w, h) vào tấm stock.
+        Hỗ trợ xoay 90°: hàm sẽ thử cả (w, h) và (h, w) nếu chúng khác nhau.
+        Sử dụng chiến lược best-fit dựa trên danh sách free_rectangles.
+        Nếu thành công, cập nhật placements và free_rectangles (theo Guillotine split) và trả về True.
+        Nếu không tìm được vùng phù hợp cho bất kỳ hướng nào, trả về False.
+        """
+        candidates = []
 
-        A_ub = np.array(A_list)
-        b_ub = np.array(b_list)
-        c = [self.C_ss] * len(self.patterns)
+        # Thử đặt với hướng ban đầu (w, h)
+        res1 = self.find_free_rect_for(w, h)
+        if res1 is not None:
+            index1, free_rect1 = res1
+            fx1, fy1, fw1, fh1 = free_rect1
+            area_diff1 = (fw1 * fh1) - (w * h)
+            candidates.append((area_diff1, index1, free_rect1, w, h))
 
-        res = linprog(c=c, A_ub=A_ub, b_ub=b_ub, bounds=(0, None), method='highs')
-        if res.success:
-            x = np.ceil(res.x)
-            total_cost = len(self.patterns)*self.C_su + np.sum(x)*self.C_ss
-        else:
-            total_cost = 999999
-        return total_cost
+        # Nếu sản phẩm không vuông, thử xoay 90°: (h, w)
+        if w != h:
+            res2 = self.find_free_rect_for(h, w)
+            if res2 is not None:
+                index2, free_rect2 = res2
+                fx2, fy2, fw2, fh2 = free_rect2
+                area_diff2 = (fw2 * fh2) - (w * h)  # diện tích sản phẩm vẫn bằng w*h
+                candidates.append((area_diff2, index2, free_rect2, h, w))
 
-    def render(self, mode='human'):
-        print("Demand:", self.current_demand)
-        print("Current Pattern:", self.current_pattern)
-        print("Remaining Area:", self.remaining_area)
+        if not candidates:
+            return False
 
-    def close(self):
-        pass
+        # Chọn ứng viên với diện tích dư thừa nhỏ nhất
+        candidates.sort(key=lambda x: x[0])
+        _, index, free_rect, used_w, used_h = candidates[0]
+        fx, fy, fw, fh = free_rect
+        placed_rect = (fx, fy, used_w, used_h)
+        self.placements.append(placed_rect)
+        del self.free_rectangles[index]
+        new_rects = self.split_free_rect(free_rect, placed_rect)
+        for r in new_rects:
+            if r[2] > 0 and r[3] > 0:
+                self.free_rectangles.append(r)
+        return True
+
+def can_pack_all_products_guillotine(stock_size, products):
+    """
+    Kiểm tra xem với một tấm stock duy nhất có kích thước stock_size (width, height)
+    có thể xếp được tất cả các sản phẩm theo yêu cầu Guillotine hay không.
+    
+    Input:
+        - stock_size: tuple (width, height) của tấm stock.
+        - products: danh sách các sản phẩm, mỗi sản phẩm là tuple (w, h, demand)
+                với w, h là kích thước sản phẩm và demand là số lượng cần xếp.
+    
+    Output:
+        - Trả về tuple (packable, waste_area) trong đó:
+            + packable là True nếu tất cả sản phẩm được xếp theo yêu cầu Guillotine, ngược lại False.
+            + waste_area là diện tích phần lãng phí trên tấm stock nếu xếp được, hoặc None nếu không xếp được.
+    """
+    stock_width, stock_height = stock_size
+
+    # Kiểm tra nhanh: nếu kích thước sản phẩm vượt quá kích thước stock (cả khi xoay 90°) thì không thể xếp.
+    for w, h, demand in products:
+        if (w > stock_width or h > stock_height) and (h > stock_width or w > stock_height):
+            return (False, None)
+
+    # Sắp xếp sản phẩm theo diện tích giảm dần để đặt những sản phẩm lớn trước.
+    sorted_products = sorted(products, key=lambda x: x[0] * x[1], reverse=True)
+    sheet = GuillotineStockSheet(stock_width, stock_height)
+    for w, h, demand in sorted_products:
+        for _ in range(demand):
+            if not sheet.place_rect(w, h):
+                return (False, None)
+
+    # Nếu đã xếp được tất cả, tính diện tích lãng phí:
+    used_area = sum(w * h for (_, _, w, h) in sheet.placements)
+    total_area = stock_width * stock_height
+    waste_area = total_area - used_area
+    return (True, waste_area)
+
+# ------------------ PHẦN TEST ------------------
+
+if __name__ == "__main__":
+    # Kích thước của tấm stock duy nhất (ví dụ: 200 x 150)
+    stock_size = (200, 150)
+    
+    # Danh sách sản phẩm: mỗi sản phẩm là (width, height, demand)
+    # Ví dụ: (50, 40, 2) nghĩa là sản phẩm có kích thước 50x40 cần xếp 2 lần.
+    products = [
+        (50, 40, 2),
+        (60, 30, 2),
+        (40, 40, 3),
+        (70, 50, 2),
+        (10, 80, 9),
+        (30, 20, 1)
+    ]
+    
+    packable, waste = can_pack_all_products_guillotine(stock_size, products)
+    print("Có thể xếp tất cả sản phẩm theo Guillotine (với hỗ trợ xoay 90°) không?", packable)
+    if packable:
+        print("Diện tích lãng phí:", waste)
+    else:
+        print("Không thể xếp được tất cả sản phẩm.")
