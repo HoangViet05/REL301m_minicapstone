@@ -1,3 +1,6 @@
+import sys
+sys.path.append("E:/Learn_space/FPT/REL301m/REL301m_mini_capstone_GROUP4/Helper function")
+
 from Best_fit import can_pack_all_products_guillotine, GuillotineStockSheet
 from cutting_stock_env_2DCSP_S_DeepQ import CuttingStockEnv
 
@@ -198,16 +201,20 @@ class DQNAgent:
 # ======================================
 # Khởi tạo môi trường và DQN Agent
 # ======================================
-env = CuttingStockEnv(
-    products=[(50, 40, 7), (60, 30, 3), (40, 40, 3)],
-    stock_size=(200, 150),
-    max_steps=200,
-    max_patterns=5
-)
+if __name__ == '__main__':
+    env = CuttingStockEnv(
+            product_ranges=[
+                (40, 80, 30, 60, 1, 10),  # Sản phẩm 1: width 40-80, height 30-60, demand 1-10
+                (50, 100, 40, 70, 1, 5)   # Sản phẩm 2: width 50-100, height 40-70, demand 1-5
+            ],
+            pattern_size_range=(150, 250, 100, 200),  # Pattern size động
+            max_steps=200,
+            max_patterns=10
+        )
 
-dqn_agent = DQNAgent(env, lr=1e-4, gamma=0.95, epsilon=1.0, epsilon_decay=0.9999, epsilon_min=0.01,
-                    batch_size=128, target_update_freq=500, replay_buffer_capacity=10000)
+    dqn_agent = DQNAgent(env, lr=1e-4, gamma=0.95, epsilon=1.0, epsilon_decay=0.9999, epsilon_min=0.01,
+                        batch_size=128, target_update_freq=500, replay_buffer_capacity=10000)
 
-dqn_agent.train(episodes=20000, max_steps=200)
-dqn_agent.plot_metrics()
-dqn_agent.save_model("dqn_model.pt")
+    dqn_agent.train(episodes=20000, max_steps=200)
+    dqn_agent.plot_metrics()
+    dqn_agent.save_model("dqn_model.pt")

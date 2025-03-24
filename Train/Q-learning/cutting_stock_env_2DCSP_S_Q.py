@@ -278,6 +278,5 @@ class CuttingStockEnv(gym.Env):
         plt.tight_layout()
         plt.show()
 
-
     def close(self):
         pass

@@ -1,6 +1,9 @@
 # ---------------------------
 # Lớp QLearningAgent với các biểu đồ bổ sung và lưu model
 # ---------------------------
+import sys
+sys.path.append("E:/Learn_space/FPT/REL301m/REL301m_mini_capstone_GROUP4/Helper function")
+
 import matplotlib.pyplot as plt
 import pickle
 import numpy as np
@@ -76,10 +79,10 @@ class QLearningAgent:
                 print(f"Episode {episode}: Reward={episode_reward:.2f}, Cost={episode_cost:.2f}, Epsilon={self.epsilon:.4f}")
 
             if episode % 500 == 0:
-              avg_cost = np.mean(agent.costs_history[-100:])
-              success_rate = np.mean(agent.success_history[-100:])
-              print(f"Episode {episode}: Avg Cost (100 eps) = {avg_cost:.2f}, Success Rate = {success_rate:.2f}")
-                
+                avg_cost = np.mean(agent.costs_history[-100:])
+                success_rate = np.mean(agent.success_history[-100:])
+                print(f"Episode {episode}: Avg Cost (100 eps) = {avg_cost:.2f}, Success Rate = {success_rate:.2f}")
+                    
     def plot_metrics(self):
         episodes = np.arange(len(self.rewards_history))
         
