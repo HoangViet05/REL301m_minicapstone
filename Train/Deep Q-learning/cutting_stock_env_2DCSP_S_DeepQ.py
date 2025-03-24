@@ -1,3 +1,10 @@
+import gym
+from gym import spaces
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import linprog
+from Best_fit import can_pack_all_products_guillotine, GuillotineStockSheet
+
 # ===============================
 # Environment: CuttingStockEnv
 # ===============================

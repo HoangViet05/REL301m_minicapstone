@@ -46,7 +46,7 @@ def visualize_and_save_patterns(env, save_dir, episode_num):
 
 def test_agent(agent, episodes=10, visualize=False):
     # Tạo thư mục lưu kết quả với tên theo thời gian hiện tại
-    base_save_path = r"E:\Learn_space\FPT\REL301m\REL301m_mini_capstone_GROUP4\Test\result"
+    base_save_path = r"E:\Learn_space\FPT\REL301m\REL301m_mini_capstone_GROUP4\Test\result_Q_Learning"
     timestamp_folder = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = os.path.join(base_save_path, timestamp_folder)
     os.makedirs(save_dir, exist_ok=True)
@@ -98,7 +98,7 @@ if __name__ == '__main__':
     
     # Load agent từ file model.pkl (đảm bảo file này đã được lưu sau quá trình train)
     agent = load_agent(
-        "E:\\Learn_space\\FPT\\REL301m\\REL301m_mini_capstone_GROUP4\\model\\qlearning_model.pkl", 
+        "E:\\Learn_space\\FPT\\REL301m\\REL301m_mini_capstone_GROUP4\\Model\\qlearning_model.pkl", 
         test_env
     )
     
